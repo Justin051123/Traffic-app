@@ -1,0 +1,6 @@
+{
+  "name": "VinCheck SA",
+  "description": "Comprehensive South African vehicle VIN decoder, NaTIS registration history check, AI inspection, audio report, and vehicle visualization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
