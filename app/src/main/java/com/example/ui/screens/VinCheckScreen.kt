@@ -37,11 +37,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import android.content.Intent
+import com.example.SearchMode
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
@@ -59,11 +65,13 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timeline
@@ -112,6 +120,8 @@ import com.example.ui.components.DetailRow
 import com.example.ui.components.SectionCard
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.formatZar
+import com.example.data.validation.Iso3779ValidationResult
+import com.example.data.validation.Iso3779Validator
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CrimsonError
 import com.example.ui.theme.EmeraldGreen
@@ -131,6 +141,7 @@ fun VinCheckScreen(
 ) {
     val vinInput by viewModel.vinInput.collectAsState()
     val isVinValid by viewModel.isVinValid.collectAsState()
+    val iso3779Validation by viewModel.iso3779Validation.collectAsState()
     val vehicleDetails by viewModel.vehicleDetails.collectAsState()
     val isAuditing by viewModel.isAuditing.collectAsState()
     val isTtsLoading by viewModel.isTtsLoading.collectAsState()
@@ -143,9 +154,52 @@ fun VinCheckScreen(
     val isNetworkFetching by viewModel.isNetworkFetching.collectAsState()
     val networkSourceStatus by viewModel.networkSourceStatus.collectAsState()
     val lastApiSyncTime by viewModel.lastApiSyncTime.collectAsState()
+    val doubleVerificationAudit by viewModel.doubleVerificationAudit.collectAsState()
+    val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsState()
+    val isGeneratingPdf by viewModel.isGeneratingPdf.collectAsState()
+    val pdfStatusMessage by viewModel.pdfStatusMessage.collectAsState()
+    val searchMode by viewModel.searchMode.collectAsState()
+    val plateInput by viewModel.plateInput.collectAsState()
+    val webAppUrl by viewModel.webAppUrl.collectAsState()
     val context = LocalContext.current
 
-    // Camera take picture preview launcher for plate / disc OCR
+    // Dedicated Dashboard / Windshield VIN Camera launcher
+    val dashVinCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            viewModel.scanDashboardVin(bitmap)
+        }
+    }
+
+    val dashVinCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            dashVinCameraLauncher.launch(null)
+        } else {
+            Toast.makeText(context, "Camera permission required to scan dashboard VIN plate", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val dashVinPhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val bmp = BitmapFactory.decodeStream(stream)
+                    if (bmp != null) {
+                        viewModel.scanDashboardVin(bmp)
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to read VIN photo: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Camera take picture preview launcher for plate OCR
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
@@ -183,6 +237,44 @@ fun VinCheckScreen(
         }
     }
 
+    // Dedicated License Disc camera launcher
+    val discCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            viewModel.scanLicenseDisc(bitmap)
+        }
+    }
+
+    // Dedicated License Disc camera permission launcher
+    val discCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            discCameraLauncher.launch(null)
+        } else {
+            Toast.makeText(context, "Camera permission required to scan vehicle license disc", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Dedicated License Disc photo upload launcher
+    val discPhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val bmp = BitmapFactory.decodeStream(stream)
+                    if (bmp != null) {
+                        viewModel.scanLicenseDisc(bmp)
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to load disc photo: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val saPlatePresets = remember {
         listOf(
             SaPlatePreset("ND 842 190", "Hilux 4x4", "KZN"),
@@ -215,141 +307,626 @@ fun VinCheckScreen(
                 color = Slate400
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Input Field
-            OutlinedTextField(
-                value = vinInput,
-                onValueChange = { viewModel.updateVinInput(it) },
-                label = { Text("Enter 17-Character VIN") },
-                placeholder = { Text("e.g. AHTBA3CD407129481") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.DirectionsCar,
-                        contentDescription = "Car",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                },
-                trailingIcon = {
-                    if (vinInput.isNotEmpty()) {
-                        IconButton(
-                            onClick = { viewModel.updateVinInput("") },
-                            modifier = Modifier.testTag("clear_vin_button")
-                        ) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear")
-                        }
-                    }
-                },
-                supportingText = {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = if (vinInput.length == 17) "Standard ISO 3779 South Africa VIN Valid" else "Enter exactly 17 characters (${vinInput.length}/17)",
-                            color = if (vinInput.length == 17) EmeraldGreen else Slate400,
-                            fontSize = 11.sp
-                        )
-                        if (vinInput.isNotEmpty() && (vinInput.contains("I") || vinInput.contains("O") || vinInput.contains("Q"))) {
-                            Text("Note: I, O, Q replaced by standard", color = AmberWarning, fontSize = 11.sp)
-                        }
-                    }
-                },
-                singleLine = true,
+            // Web App Link Banner
+            Surface(
                 shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = Slate700,
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                ),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("vin_input_field")
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Action row: Search Button + Camera OCR Scan
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(bottom = 12.dp)
             ) {
-                Button(
-                    onClick = { viewModel.performVinCheck() },
-                    enabled = vinInput.length == 17 && !isNetworkFetching,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier
-                        .weight(1.3f)
-                        .height(48.dp)
-                        .testTag("run_vin_check_button")
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    if (isNetworkFetching) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Language,
+                            contentDescription = "Web App",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Querying...", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    } else {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Search NaTIS", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "VinCheck SA Web App Link",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "Persistent: $webAppUrl",
+                                fontSize = 10.sp,
+                                color = Slate400,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = { viewModel.openWebAppDialog() },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(32.dp)
+                            .testTag("web_app_banner_button")
+                    ) {
+                        Text("Get Link", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
+            }
 
-                Button(
-                    onClick = {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                            cameraLauncher.launch(null)
-                        } else {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                    },
-                    enabled = !isOcrScanning,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Slate800,
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(12.dp),
+            // Search Mode Tabs: VIN, Number Plate, License Disc
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // VIN Tab
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (searchMode == SearchMode.VIN) MaterialTheme.colorScheme.primary else Color.Transparent,
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp)
-                        .testTag("camera_ocr_scan_button")
+                        .clickable { viewModel.setSearchMode(SearchMode.VIN) }
+                        .testTag("tab_search_vin")
                 ) {
-                    if (isOcrScanning) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Plate OCR", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsCar,
+                            contentDescription = null,
+                            tint = if (searchMode == SearchMode.VIN) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "VIN",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (searchMode == SearchMode.VIN) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
-                OutlinedButton(
-                    onClick = {
-                        photoPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
-                    enabled = !isOcrScanning,
-                    shape = RoundedCornerShape(12.dp),
+                // Number Plate Tab
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (searchMode == SearchMode.NUMBER_PLATE) MaterialTheme.colorScheme.primary else Color.Transparent,
                     modifier = Modifier
-                        .weight(0.7f)
-                        .height(48.dp)
-                        .testTag("photo_ocr_picker_button")
+                        .weight(1.2f)
+                        .clickable { viewModel.setSearchMode(SearchMode.NUMBER_PLATE) }
+                        .testTag("tab_search_plate")
                 ) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = "Pick Photo", modifier = Modifier.size(18.dp))
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Badge,
+                            contentDescription = null,
+                            tint = if (searchMode == SearchMode.NUMBER_PLATE) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Number Plate",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (searchMode == SearchMode.NUMBER_PLATE) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // License Disc Tab
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (searchMode == SearchMode.LICENSE_DISC) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .clickable { viewModel.setSearchMode(SearchMode.LICENSE_DISC) }
+                        .testTag("tab_search_disc")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = if (searchMode == SearchMode.LICENSE_DISC) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "License Disc",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (searchMode == SearchMode.LICENSE_DISC) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            when (searchMode) {
+                SearchMode.VIN -> {
+                    // VIN Input Field
+                    OutlinedTextField(
+                        value = vinInput,
+                        onValueChange = { viewModel.updateVinInput(it) },
+                        label = { Text("Enter 17-Character VIN") },
+                        placeholder = { Text("e.g. AHTBA3CD407129481") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.DirectionsCar,
+                                contentDescription = "Car",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingIcon = {
+                            if (vinInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { viewModel.updateVinInput("") },
+                                    modifier = Modifier.testTag("clear_vin_button")
+                                ) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                }
+                            }
+                        },
+                        supportingText = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                val validation = iso3779Validation
+                                val statusText = when {
+                                    validation == null -> "Enter 17-character VIN"
+                                    validation.isValid -> "ISO 3779 Standard Valid (${validation.wmiCountry})"
+                                    validation.illegalCharacters.isNotEmpty() -> "Prohibited letters: ${validation.illegalCharacters.joinToString(", ")} (I, O, Q forbidden)"
+                                    !validation.lengthValid -> "Enter 17 characters (${vinInput.length}/17)"
+                                    else -> validation.errorReason ?: "ISO 3779 format error"
+                                }
+                                val statusColor = when {
+                                    validation?.isValid == true -> EmeraldGreen
+                                    validation?.illegalCharacters?.isNotEmpty() == true -> CrimsonError
+                                    vinInput.length == 17 -> AmberWarning
+                                    else -> Slate400
+                                }
+                                Text(
+                                    text = statusText,
+                                    color = statusColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "${vinInput.length}/17",
+                                    color = if (vinInput.length == 17) EmeraldGreen else Slate400,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = Slate700,
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("vin_input_field")
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Action row: Search Button + Camera OCR Scan
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.performVinCheck() },
+                            enabled = vinInput.length == 17 && iso3779Validation?.isValid == true && !isNetworkFetching,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .height(48.dp)
+                                .testTag("run_vin_check_button")
+                        ) {
+                            if (isNetworkFetching) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Querying...", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            } else {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Search NaTIS", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                    dashVinCameraLauncher.launch(null)
+                                } else {
+                                    dashVinCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                }
+                            },
+                            enabled = !isOcrScanning,
+                            colors = ButtonDefaults.buttonColors(containerColor = Slate800, contentColor = Color.White),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1.1f)
+                                .height(48.dp)
+                                .testTag("camera_ocr_scan_button")
+                        ) {
+                            if (isOcrScanning) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Scanning...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Scan Dash VIN", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                dashVinPhotoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            enabled = !isOcrScanning,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(0.7f)
+                                .height(48.dp)
+                                .testTag("photo_ocr_picker_button")
+                        ) {
+                            Icon(Icons.Default.UploadFile, contentDescription = "Upload VIN Photo", modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Scan windshield lower-corner dashboard VIN plate or door pillar with Google ML Kit",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Slate400,
+                        fontSize = 10.sp
+                    )
+
+                    // ISO 3779 Structural Validation & Checksum Breakdown
+                    if (vinInput.isNotEmpty() && iso3779Validation != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Iso3779StructureCard(
+                            validation = iso3779Validation!!,
+                            rawVin = vinInput
+                        )
+                    }
+                }
+
+                SearchMode.NUMBER_PLATE -> {
+                    // NUMBER PLATE INPUT FIELD
+                    OutlinedTextField(
+                        value = plateInput,
+                        onValueChange = { viewModel.updatePlateInput(it) },
+                        label = { Text("Enter South African Number Plate") },
+                        placeholder = { Text("e.g. ND 842 190, CA 529 881, JH 21 XK GP") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Badge,
+                                contentDescription = "Plate",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingIcon = {
+                            if (plateInput.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { viewModel.updatePlateInput("") },
+                                    modifier = Modifier.testTag("clear_plate_button")
+                                ) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                }
+                            }
+                        },
+                        supportingText = {
+                            Text(
+                                text = "Supports all 9 SA provinces (GP, KZN, WC, EC, FS, MP, LP, NW, NC)",
+                                color = Slate400,
+                                fontSize = 11.sp
+                            )
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = Slate700,
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("plate_input_field")
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Number Plate Action Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.performPlateLookup() },
+                            enabled = plateInput.isNotBlank() && !isNetworkFetching,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .height(48.dp)
+                                .testTag("verify_plate_button")
+                        ) {
+                            if (isNetworkFetching) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Verifying...", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            } else {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Verify Plate", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                    cameraLauncher.launch(null)
+                                } else {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                }
+                            },
+                            enabled = !isOcrScanning,
+                            colors = ButtonDefaults.buttonColors(containerColor = Slate800, contentColor = Color.White),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("plate_camera_scan_button")
+                        ) {
+                            Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Scan Plate", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            enabled = !isOcrScanning,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(0.7f)
+                                .height(48.dp)
+                                .testTag("plate_photo_picker_button")
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = "Pick Photo", modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // South African License Plate Presets
+                    Text(
+                        text = "Or Select South African Plate to Query:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Slate400,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(saPlatePresets) { preset ->
+                            val plate = preset.plate
+                            val modelName = preset.modelName
+                            val province = preset.province
+                            val isCurrentPlate = vehicleDetails?.registrationNumber == plate || plateInput == plate
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isCurrentPlate) EmeraldGreen else Color.White,
+                                border = androidx.compose.foundation.BorderStroke(1.5.dp, if (isCurrentPlate) EmeraldGreen else Color.Black),
+                                modifier = Modifier
+                                    .clickable {
+                                        viewModel.updatePlateInput(plate)
+                                        viewModel.scanPlateByText(plate)
+                                    }
+                                    .testTag("plate_chip_${plate.replace(" ", "_")}")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = plate,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        color = if (isCurrentPlate) Color.White else Color.Black
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "• $modelName ($province)",
+                                        fontSize = 10.sp,
+                                        color = if (isCurrentPlate) Color.White else Slate700
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SearchMode.LICENSE_DISC -> {
+                    // DEDICATED LICENSE DISC SCAN & UPLOAD MODULE
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(EmeraldGreen.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Security,
+                                        contentDescription = null,
+                                        tint = EmeraldGreen,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "South African MVLX License Disc",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Scan the circular windscreen disc or upload a photo",
+                                        fontSize = 11.sp,
+                                        color = Slate400
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                // Scan Disc with Camera
+                                Button(
+                                    onClick = {
+                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                            discCameraLauncher.launch(null)
+                                        } else {
+                                            discCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                        }
+                                    },
+                                    enabled = !isOcrScanning,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("scan_license_disc_camera_button")
+                                ) {
+                                    if (isOcrScanning) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Reading...", fontSize = 12.sp)
+                                    } else {
+                                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Scan Camera", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                }
+
+                                // Upload Disc Photo from Gallery
+                                OutlinedButton(
+                                    onClick = {
+                                        discPhotoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    enabled = !isOcrScanning,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("upload_license_disc_button")
+                                ) {
+                                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Upload Disc", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Test with Sample License Discs
+                            Text(
+                                text = "Or Test with Sample Vehicle License Discs:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Slate400,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                SampleDiscChip(
+                                    title = "Hilux Disc (KZN)",
+                                    plate = "ND 842 190",
+                                    vin = "AHTBA3CD407129481"
+                                ) { vin, plate ->
+                                    viewModel.updateVinInput(vin)
+                                    viewModel.updatePlateInput(plate)
+                                    viewModel.performVinCheck(vin)
+                                }
+
+                                SampleDiscChip(
+                                    title = "Polo Vivo (WC)",
+                                    plate = "CA 529 881",
+                                    vin = "AAVZZZ6RZMU048291"
+                                ) { vin, plate ->
+                                    viewModel.updateVinInput(vin)
+                                    viewModel.updatePlateInput(plate)
+                                    viewModel.performVinCheck(vin)
+                                }
+
+                                SampleDiscChip(
+                                    title = "Ranger Disc (GP)",
+                                    plate = "JH 21 XK GP",
+                                    vin = "AFAXXMRTXPK712039"
+                                ) { vin, plate ->
+                                    viewModel.updateVinInput(vin)
+                                    viewModel.updatePlateInput(plate)
+                                    viewModel.performVinCheck(vin)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             // OCR Status Feedback Banner
             ocrMessage?.let { msg ->
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -379,55 +956,6 @@ fun VinCheckScreen(
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(Icons.Default.Clear, contentDescription = "Dismiss", modifier = Modifier.size(14.dp))
-                        }
-                    }
-                }
-            }
-
-            // South African License Plate Direct OCR/Lookup Chips
-            Spacer(modifier = Modifier.height(10.dp))
-            Column {
-                Text(
-                    text = "South African Number Plates (Direct OCR Lookup):",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Slate400,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(saPlatePresets) { preset ->
-                        val plate = preset.plate
-                        val modelName = preset.modelName
-                        val province = preset.province
-                        val isCurrentPlate = vehicleDetails?.registrationNumber == plate
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isCurrentPlate) EmeraldGreen else Color.White,
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, if (isCurrentPlate) EmeraldGreen else Color.Black),
-                            modifier = Modifier
-                                .clickable { viewModel.scanPlateByText(plate) }
-                                .testTag("plate_chip_${plate.replace(" ", "_")}")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                            ) {
-                                Text(
-                                    text = plate,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    color = if (isCurrentPlate) Color.White else Color.Black
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "• $modelName ($province)",
-                                    fontSize = 10.sp,
-                                    color = if (isCurrentPlate) Color.White else Slate700
-                                )
-                            }
                         }
                     }
                 }
@@ -764,12 +1292,247 @@ fun VinCheckScreen(
                                 Text("NaTIS RC1 Document", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // RMI Accredited Inspection PDF Report Actions
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { viewModel.openPdfReport(context) },
+                                enabled = !isGeneratingPdf,
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("open_vin_rmi_pdf_button")
+                            ) {
+                                if (isGeneratingPdf) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Generating...", fontSize = 12.sp)
+                                } else {
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("RMI PDF Report", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.sharePdfReport(context) },
+                                enabled = !isGeneratingPdf,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("share_vin_rmi_pdf_button")
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Share PDF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // PDF Status Notification Banner
+                        pdfStatusMessage?.let { msg ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = msg,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.clearPdfStatusMessage() },
+                                        modifier = Modifier.size(22.dp)
+                                    ) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Dismiss", modifier = Modifier.size(12.dp))
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Cloud Watchlist Button (Firebase Firestore us-west1)
+                        OutlinedButton(
+                            onClick = { viewModel.saveVehicleToWatchlist() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .testTag("save_cloud_watchlist_button")
+                        ) {
+                            Icon(Icons.Default.CloudDone, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Save Vehicle to Cloud Watchlist (Firebase)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        cloudSyncStatus?.let { status ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "• $status",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontSize = 10.sp,
+                                color = Slate400
+                            )
+                        }
+                    }
+                }
+            }
+
+            // DOUBLE-VERIFICATION AUDIT CARD (All Shown Results Double-Verified)
+            doubleVerificationAudit?.let { audit ->
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .clip(CircleShape)
+                                            .background(EmeraldGreen.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Security,
+                                            contentDescription = null,
+                                            tint = EmeraldGreen,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Double-Verification Audit",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Black,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Verified Match: ${audit.verificationScore}% • All details verified",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = EmeraldGreen,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                StatusBadge(
+                                    text = audit.fraudRiskLevel,
+                                    statusType = if (audit.isOverallVerified) BadgeStatusType.SUCCESS else BadgeStatusType.WARNING
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = Slate800)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // List of double-verified data points
+                            audit.items.forEach { item ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 5.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Icon(
+                                        imageVector = if (item.isVerified) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = if (item.isVerified) EmeraldGreen else AmberWarning,
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .padding(top = 2.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = item.title,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = item.value,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 11.sp,
+                                                color = if (item.isVerified) EmeraldGreen else AmberWarning
+                                            )
+                                        }
+                                        Text(
+                                            text = item.detail,
+                                            fontSize = 11.sp,
+                                            color = Slate400,
+                                            lineHeight = 15.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Slate900,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FactCheck,
+                                        contentDescription = null,
+                                        tint = EmeraldGreen,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = audit.summaryNotice,
+                                        fontSize = 11.sp,
+                                        color = Slate400,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             // MODULE 1: South African Vehicle Registration & License Disk Database (NaTIS)
             item {
+
                 SectionCard(
                     title = "Vehicle Registration & License Disk (NaTIS)",
                     icon = Icons.Default.FactCheck,
@@ -1302,6 +2065,7 @@ fun VinCheckScreen(
             }
         }
     }
+}
 
     // South African Vehicle License Disc (MVLX) Copy Dialog
     if (showLicenseDiscDialog && vehicleDetails != null) {
@@ -1319,4 +2083,297 @@ fun VinCheckScreen(
         )
     }
 }
+
+@Composable
+fun SampleDiscChip(
+    title: String,
+    plate: String,
+    vin: String,
+    onSelect: (vin: String, plate: String) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier
+            .clickable { onSelect(vin, plate) }
+            .testTag("sample_disc_${plate.replace(" ", "_")}")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                tint = EmeraldGreen,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Column {
+                Text(text = title, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Text(text = "$plate • ${vin.take(8)}...", fontSize = 9.5.sp, color = Slate400)
+            }
+        }
+    }
 }
+
+@Composable
+fun Iso3779StructureCard(
+    validation: Iso3779ValidationResult,
+    rawVin: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("iso_3779_structure_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (validation.isValid) EmeraldGreen.copy(alpha = 0.5f) else CrimsonError.copy(alpha = 0.4f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header Row: Title + ISO Compliance Badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (validation.isValid) Icons.Default.FactCheck else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (validation.isValid) EmeraldGreen else CrimsonError,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "ISO 3779 Structural Validation",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                StatusBadge(
+                    text = if (validation.isValid) "ISO 3779 VALID" else "NON-COMPLIANT",
+                    statusType = if (validation.isValid) BadgeStatusType.SUCCESS else BadgeStatusType.ERROR,
+                    modifier = Modifier.testTag("iso_compliance_badge")
+                )
+            }
+
+            // Error or Warning callout if invalid
+            if (!validation.isValid && validation.errorReason != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = CrimsonError.copy(alpha = 0.12f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CrimsonError.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ReportProblem,
+                            contentDescription = null,
+                            tint = CrimsonError,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = validation.errorReason,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = CrimsonError
+                        )
+                    }
+                }
+            }
+
+            // Monospace VIN Character Inspector with 3-section color-coding
+            if (rawVin.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "ISO 3779 VIN SEGMENTATION BREAKDOWN",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate400,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Slate900)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val wmiChars = rawVin.take(3)
+                    val vdsChars = if (rawVin.length > 3) rawVin.substring(3, minOf(9, rawVin.length)) else ""
+                    val visChars = if (rawVin.length > 9) rawVin.substring(9, minOf(17, rawVin.length)) else ""
+
+                    // WMI Section (Blue)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = wmiChars.ifEmpty { "..." },
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp,
+                            color = Color(0xFF60A5FA)
+                        )
+                        Text("WMI (1-3)", fontSize = 8.5.sp, color = Slate400)
+                    }
+
+                    Text("•", color = Slate700)
+
+                    // VDS Section (Purple)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = vdsChars.ifEmpty { "..." },
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp,
+                            color = Color(0xFFA78BFA)
+                        )
+                        Text("VDS (4-9)", fontSize = 8.5.sp, color = Slate400)
+                    }
+
+                    Text("•", color = Slate700)
+
+                    // VIS Section (Emerald)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = visChars.ifEmpty { "..." },
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp,
+                            color = EmeraldGreen
+                        )
+                        Text("VIS (10-17)", fontSize = 8.5.sp, color = Slate400)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 3 Detail Breakdown Blocks
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 1. WMI (World Manufacturer Identifier)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "1. WMI (World Manufacturer Identifier)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp,
+                                color = Color(0xFF60A5FA)
+                            )
+                            if (validation.isSouthAfricanWmi) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = EmeraldGreen.copy(alpha = 0.2f),
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "🇿🇦 SA Domestic Assembly",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EmeraldGreen,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (validation.wmi.isNotEmpty()) {
+                                "${validation.wmi}: ${validation.manufacturerDescription} (${validation.wmiCountry})"
+                            } else "Awaiting 3-char WMI prefix...",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // 2. VDS (Vehicle Descriptor Section & Checksum)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "2. VDS & Check Digit (Modulo 11)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp,
+                                color = Color(0xFFA78BFA)
+                            )
+                            if (validation.isChecksumMatch) {
+                                Text(
+                                    text = "✓ Modulo-11 Match",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldGreen
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (validation.vds.isNotEmpty()) {
+                                "VDS: ${validation.vds} • Pos 9 Check Digit: '${validation.checkDigit ?: "-"}' (Calculated: '${validation.calculatedCheckDigit ?: "-"}') • ${validation.checkDigitCompliance}"
+                            } else "Positions 4-9 specify vehicle attributes and check digit",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // 3. VIS (Vehicle Indicator Section)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "3. VIS (Vehicle Indicator Section)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.5.sp,
+                            color = EmeraldGreen
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (validation.vis.isNotEmpty()) {
+                                "VIS: ${validation.vis} • Model Year: ${validation.decodedModelYear ?: validation.modelYearChar ?: "—"} • Plant: ${validation.plantCode ?: "—"} • Serial: ${validation.sequentialNumber} ${if (validation.hasValidNumericEnding) "(ISO 5.3.3 Numeric Ending ✓)" else ""}"
+                            } else "Positions 10-17 encode model year, plant, and sequential production number",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

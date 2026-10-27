@@ -45,4 +45,19 @@ class ExampleRobolectricTest {
     assertNotNull(ocr)
     assertNotNull(ocr!!.detectedPlate ?: ocr.detectedVin)
   }
+
+  @Test
+  fun testGenerateRmiInspectionPdf() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val vehicle = com.example.data.VinDecoder.decode("AHTBA3CD407129481")
+    assertNotNull(vehicle)
+    val pdfFile = com.example.data.pdf.PdfReportGenerator.generateInspectionPdf(
+        context = context,
+        vehicle = vehicle!!
+    )
+    assertNotNull(pdfFile)
+    assertTrue(pdfFile.exists())
+    assertTrue(pdfFile.length() > 0)
+    assertTrue(pdfFile.name.contains("RMI_Vehicle_Inspection_AHTBA3CD407129481.pdf"))
+  }
 }

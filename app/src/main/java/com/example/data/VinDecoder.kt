@@ -54,12 +54,12 @@ object VinDecoder {
         return raw.trim().uppercase(Locale.ROOT).replace(Regex("[^A-Z0-9]"), "")
     }
 
+    fun validateIso3779(vin: String): com.example.data.validation.Iso3779ValidationResult {
+        return com.example.data.validation.Iso3779Validator.validate(vin)
+    }
+
     fun isValidVin(vin: String): Boolean {
-        val clean = cleanVin(vin)
-        if (clean.length != 17) return false
-        // I, O, Q are not permitted in standard VINs
-        if (clean.contains("I") || clean.contains("O") || clean.contains("Q")) return false
-        return true
+        return com.example.data.validation.Iso3779Validator.validate(vin).isValid
     }
 
     /**

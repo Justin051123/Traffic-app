@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "Inspection": {
+      "collection": "inspections",
+      "fields": {
+        "userId": { "type": "string" },
+        "vin": { "type": "string" },
+        "licensePlate": { "type": "string" },
+        "vehicleMake": { "type": "string" },
+        "vehicleModel": { "type": "string" },
+        "vehicleYear": { "type": "number" },
+        "damageSummary": { "type": "string" },
+        "verificationStatus": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      }
+    },
+    "SavedCheck": {
+      "collection": "saved_checks",
+      "fields": {
+        "userId": { "type": "string" },
+        "vin": { "type": "string" },
+        "licensePlate": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      }
+    }
+  }
+}

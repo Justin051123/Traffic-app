@@ -7,9 +7,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +20,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
@@ -73,6 +92,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 val currentTab by viewModel.currentTab.collectAsState()
+                val showWebAppDialog by viewModel.showWebAppDialog.collectAsState()
 
                 // System BackHandler to return to VIN Check screen
                 BackHandler(enabled = currentTab != AppTab.VIN_CHECK) {
@@ -118,10 +138,43 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             actions = {
+                                Button(
+                                    onClick = { viewModel.openWebAppDialog() },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .padding(end = 6.dp)
+                                        .testTag("top_web_app_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Language,
+                                        contentDescription = "Web App",
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Web App", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                val isUserSignedIn by viewModel.isUserSignedIn.collectAsState()
+                                val currentUser by viewModel.currentUser.collectAsState()
+
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = EmeraldGreen.copy(alpha = 0.15f),
-                                    modifier = Modifier.padding(end = 12.dp)
+                                    color = if (isUserSignedIn) MaterialTheme.colorScheme.primaryContainer else EmeraldGreen.copy(alpha = 0.15f),
+                                    modifier = Modifier
+                                        .padding(end = 12.dp)
+                                        .clickable {
+                                            if (!isUserSignedIn) {
+                                                viewModel.signInWithGoogle()
+                                            } else {
+                                                viewModel.signOut()
+                                                Toast.makeText(this@MainActivity, "Signed out of Google", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        .testTag("auth_status_chip")
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -131,12 +184,12 @@ class MainActivity : ComponentActivity() {
                                             modifier = Modifier
                                                 .size(6.dp)
                                                 .clip(CircleShape)
-                                                .background(EmeraldGreen)
+                                                .background(if (isUserSignedIn) MaterialTheme.colorScheme.primary else EmeraldGreen)
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = "SA NaTIS Live",
-                                            color = EmeraldGreen,
+                                            text = if (isUserSignedIn) (currentUser?.email?.substringBefore("@") ?: "Account") else "Google Sync",
+                                            color = if (isUserSignedIn) MaterialTheme.colorScheme.onPrimaryContainer else EmeraldGreen,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -267,6 +320,158 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(innerPadding)
                         )
                     }
+                }
+
+                if (showWebAppDialog) {
+                    val context = LocalContext.current
+                    val currentWebAppUrl by viewModel.webAppUrl.collectAsState()
+
+                    AlertDialog(
+                        onDismissRequest = { viewModel.closeWebAppDialog() },
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        },
+                        title = {
+                            Text(
+                                text = "VinCheck SA Web App",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        },
+                        text = {
+                            Column {
+                                Text(
+                                    text = "Access VinCheck SA directly in any web browser without installation:",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = currentWebAppUrl,
+                                        fontSize = 11.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(10.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(EmeraldGreen)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Saved persistently in device storage & Firestore",
+                                        fontSize = 10.5.sp,
+                                        color = EmeraldGreen,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = "Select Persistent Web App Environment:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Slate400
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val isSharedActive = currentWebAppUrl.contains("ais-pre-")
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSharedActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { viewModel.setWebAppUrlToDefault() }
+                                    ) {
+                                        Text(
+                                            text = "Shared (Pre-Rel)",
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSharedActive) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (!isSharedActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { viewModel.setWebAppUrlToDev() }
+                                    ) {
+                                        Text(
+                                            text = "Dev Environment",
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (!isSharedActive) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val clip = ClipData.newPlainText("VinCheck SA Web App", currentWebAppUrl)
+                                            clipboard.setPrimaryClip(clip)
+                                            Toast.makeText(context, "Web App link copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Copy Link", fontSize = 12.sp)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(currentWebAppUrl)).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(intent)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Open Browser", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.closeWebAppDialog() }) {
+                                Text("Done", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    )
                 }
             }
         }

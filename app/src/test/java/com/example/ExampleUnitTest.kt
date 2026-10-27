@@ -94,4 +94,77 @@ class ExampleUnitTest {
         assertEquals("Ranger", ranger.model)
         assertEquals("AFAXXMRTXPK712039", ranger.vin)
     }
+
+    @Test
+    fun testDoubleVerificationEngine() {
+        val hilux = VinDecoder.decode("AHTBA3CD407129481")
+        val audit = com.example.data.verification.VehicleVerificationEngine.performDoubleVerification(hilux)
+
+        assertTrue(audit.isOverallVerified)
+        assertTrue(audit.verificationScore >= 80)
+        assertEquals("Low Risk / Fully Verified", audit.fraudRiskLevel)
+        assertEquals(8, audit.items.size)
+
+        // Verify that SAPS check is verified and clear
+        val sapsItem = audit.items.find { it.title.contains("SAPS") }
+        assertNotNull(sapsItem)
+        assertTrue(sapsItem!!.isVerified)
+
+        // Verify that Plate item is verified
+        val plateItem = audit.items.find { it.title.contains("Plate") }
+        assertNotNull(plateItem)
+        assertTrue(plateItem!!.isVerified)
+
+        // Verify that Engine item is verified
+        val engineItem = audit.items.find { it.title.contains("Engine") }
+        assertNotNull(engineItem)
+        assertTrue(engineItem!!.isVerified)
+    }
+
+    @Test
+    fun testIso3779StandardValidation() {
+        val validator = com.example.data.validation.Iso3779Validator
+
+        // 1. Valid South African Toyota Hilux VIN
+        val hiluxVin = "AHTBA3CD407129481"
+        val hiluxResult = validator.validate(hiluxVin)
+        assertTrue(hiluxResult.isValid)
+        assertTrue(hiluxResult.lengthValid)
+        assertTrue(hiluxResult.characterSetValid)
+        assertTrue(hiluxResult.isSouthAfricanWmi)
+        assertEquals("AHT", hiluxResult.wmi)
+        assertEquals("South Africa", hiluxResult.wmiCountry)
+        assertTrue(hiluxResult.manufacturerDescription.contains("Toyota"))
+        assertEquals("BA3CD4", hiluxResult.vds)
+        assertEquals('4', hiluxResult.checkDigit)
+        assertEquals('0', hiluxResult.modelYearChar)
+        assertTrue(hiluxResult.hasValidNumericEnding)
+
+        // 2. Modulo 11 Check Digit calculation
+        val checkDigit = validator.calculateCheckDigit(hiluxVin)
+        assertNotNull(checkDigit)
+
+        // 3. Prohibited Character 'I', 'O', 'Q' Detection (ISO 3779 Clause 4)
+        val prohibitedVin = "AHTBA3CD40I129481"
+        val prohibitedResult = validator.validate(prohibitedVin)
+        assertFalse(prohibitedResult.isValid)
+        assertFalse(prohibitedResult.characterSetValid)
+        assertTrue(prohibitedResult.illegalCharacters.contains('I'))
+        assertNotNull(prohibitedResult.errorReason)
+
+        // 4. Invalid Length Detection
+        val shortVin = "AHTBA3CD40712"
+        val shortResult = validator.validate(shortVin)
+        assertFalse(shortResult.isValid)
+        assertFalse(shortResult.lengthValid)
+
+        // 5. Valid VW Kariega Eastern Cape WMI
+        val vwVin = "AAVZZZ6RZMU048291"
+        val vwResult = validator.validate(vwVin)
+        assertTrue(vwResult.isValid)
+        assertTrue(vwResult.isSouthAfricanWmi)
+        assertEquals("AAV", vwResult.wmi)
+        assertTrue(vwResult.manufacturerDescription.contains("Volkswagen"))
+    }
 }
+

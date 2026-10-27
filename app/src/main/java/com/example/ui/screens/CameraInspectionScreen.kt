@@ -37,9 +37,13 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ReportProblem
@@ -110,6 +114,8 @@ fun CameraInspectionScreen(
     val isAudioPlaying by viewModel.audioPlayer.isPlaying.collectAsState()
     val currentPlayingId by viewModel.audioPlayer.currentPlayingId.collectAsState()
     val isTtsLoading by viewModel.isTtsLoading.collectAsState()
+    val isGeneratingPdf by viewModel.isGeneratingPdf.collectAsState()
+    val pdfStatusMessage by viewModel.pdfStatusMessage.collectAsState()
 
     // Camera take picture preview launcher
     val cameraLauncher = rememberLauncherForActivityResult(
@@ -146,6 +152,44 @@ fun CameraInspectionScreen(
             } catch (e: Exception) {
                 Toast.makeText(context, "Failed to load selected photo", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    val dashVinCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            viewModel.scanDashboardVin(bitmap)
+            Toast.makeText(context, "Scanning Dashboard VIN with ML Kit...", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val dashVinCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            dashVinCameraLauncher.launch(null)
+        } else {
+            Toast.makeText(context, "Camera permission required to scan dashboard VIN", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val discCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            viewModel.scanLicenseDisc(bitmap)
+            Toast.makeText(context, "Scanning License Disc with ML Kit...", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val discCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            discCameraLauncher.launch(null)
+        } else {
+            Toast.makeText(context, "Camera permission required to scan license disc", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -326,6 +370,63 @@ fun CameraInspectionScreen(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                        dashVinCameraLauncher.launch(null)
+                                    } else {
+                                        dashVinCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    }
+                                }
+                                .testTag("inspection_scan_dash_vin")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Default.DirectionsCar, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Scan Dash VIN", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                        discCameraLauncher.launch(null)
+                                    } else {
+                                        discCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    }
+                                }
+                                .testTag("inspection_scan_license_disc")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Default.Security, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Scan License Disc", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Test preset image buttons for emulator/browser users
@@ -440,9 +541,9 @@ fun CameraInspectionScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Visual Condition Report",
+                                    text = "Visual Condition & OEM Conformity",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -455,10 +556,25 @@ fun CameraInspectionScreen(
                                 )
                             }
 
-                            StatusBadge(
-                                text = report.overallVisualCondition,
-                                statusType = if (report.overallVisualCondition.contains("Good", ignoreCase = true)) BadgeStatusType.SUCCESS else BadgeStatusType.WARNING
-                            )
+                            Column(horizontalAlignment = Alignment.End) {
+                                StatusBadge(
+                                    text = report.overallVisualCondition,
+                                    statusType = if (report.overallVisualCondition.contains("Good", ignoreCase = true)) BadgeStatusType.SUCCESS else BadgeStatusType.WARNING
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = report.damageSeverity,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -483,19 +599,20 @@ fun CameraInspectionScreen(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
 
-                        // TTS Voice Button for Speech
+                        // TTS Voice Button and Retake
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(
                                 onClick = {
-                                    val speechText = "Certified Visual Vehicle Inspection for ${report.detectedVehicleDescription}. " +
-                                            "Overall rating: ${report.overallVisualCondition}. " +
-                                            "Verified observations: ${report.verifiedVisualFindings.joinToString(". ")}. " +
+                                    val speechText = "Visual condition inspection for ${report.detectedVehicleDescription}. " +
+                                            "Severity: ${report.damageSeverity}. " +
+                                            "Paint condition: ${report.paintIssues.joinToString(". ")}. " +
+                                            "Panel gaps: ${report.structuralOrPanelGaps.joinToString(". ")}. " +
+                                            "Aftermarket modifications: ${report.aftermarketModifications.joinToString(". ")}. " +
                                             "Visible defects: ${report.visibleDefects.joinToString(". ")}. " +
-                                            "Notice: Internal engine, transmission, and chassis underside are unverified from photograph. " +
-                                            "Legal verdict: ${report.legalComplianceVerdict}"
+                                            "Verdict: ${report.legalComplianceVerdict}"
                                     viewModel.speakText("vision_report", speechText)
                                 },
                                 shape = RoundedCornerShape(10.dp),
@@ -516,7 +633,7 @@ fun CameraInspectionScreen(
                                 } else {
                                     Icon(Icons.Default.VolumeUp, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Listen Report (TTS)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Listen (TTS)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
 
@@ -527,6 +644,96 @@ fun CameraInspectionScreen(
                                 Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Retake", fontSize = 12.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Cloud Firestore Sync Button
+                        Button(
+                            onClick = { viewModel.saveInspectionToCloud() },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .testTag("save_cloud_inspection_button")
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Save Inspection to Cloud (Firebase)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // RMI Certified PDF Export & Share Action Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { viewModel.openPdfReport(context) },
+                                enabled = !isGeneratingPdf,
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("open_rmi_pdf_button")
+                            ) {
+                                if (isGeneratingPdf) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Generating...", fontSize = 12.sp)
+                                } else {
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("RMI PDF Report", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.sharePdfReport(context) },
+                                enabled = !isGeneratingPdf,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("share_rmi_pdf_button")
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Share PDF", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+
+                        // PDF Status Notification Banner
+                        pdfStatusMessage?.let { msg ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Verified, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = msg,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.clearPdfStatusMessage() },
+                                        modifier = Modifier.size(22.dp)
+                                    ) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Dismiss", modifier = Modifier.size(12.dp))
+                                    }
+                                }
                             }
                         }
 
@@ -552,9 +759,63 @@ fun CameraInspectionScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // SECTION 2: VISIBLE DEFECTS & WEAR
+                        // SECTION 2: PAINT ISSUES & FACTORY CLEAR COAT INTEGRITY
                         Text(
-                            text = "2. VISIBLE DEFECTS & WEAR INDICATORS:",
+                            text = "2. PAINT ISSUES & CLEAR COAT INTEGRITY:",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        report.paintIssues.forEach { paintIssue ->
+                            Row(modifier = Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(text = paintIssue, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface, lineHeight = 16.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // SECTION 3: PANEL GAPS & STRUCTURAL SYMMETRY
+                        Text(
+                            text = "3. PANEL GAPS & STRUCTURAL ALIGNMENT:",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = AmberWarning
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        report.structuralOrPanelGaps.forEach { gap ->
+                            Row(modifier = Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
+                                Icon(Icons.Default.Security, contentDescription = null, tint = AmberWarning, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(text = gap, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface, lineHeight = 16.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // SECTION 4: AFTERMARKET MODIFICATIONS VS OEM FACTORY SPEC
+                        Text(
+                            text = "4. AFTERMARKET MODIFICATIONS VS OEM FACTORY SPEC:",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        report.aftermarketModifications.forEach { mod ->
+                            Row(modifier = Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(text = mod, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface, lineHeight = 16.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // SECTION 5: VISIBLE DEFECTS & WEAR
+                        Text(
+                            text = "5. VISIBLE DEFECTS & WEAR INDICATORS:",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             color = AmberWarning
@@ -570,7 +831,7 @@ fun CameraInspectionScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // SECTION 3: STRICTLY UNVERIFIED / INCONCLUSIVE (ANTI-FRAUD MANDATE)
+                        // SECTION 6: STRICTLY UNVERIFIED / INCONCLUSIVE (ANTI-FRAUD MANDATE)
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = Slate900,
@@ -582,7 +843,7 @@ fun CameraInspectionScreen(
                                     Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = Slate400, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "3. STRICTLY UNVERIFIED AREAS (Not observable):",
+                                        text = "6. STRICTLY UNVERIFIED AREAS (Not observable):",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp,
                                         color = Slate400
@@ -603,9 +864,9 @@ fun CameraInspectionScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // SECTION 4: LEGAL VERDICT & NEXT STEPS
+                        // SECTION 7: LEGAL VERDICT & NEXT STEPS
                         Text(
-                            text = "4. COMMERCIAL VERDICT & DEKRA/AVTS GUIDANCE:",
+                            text = "7. COMMERCIAL VERDICT & DEKRA/AVTS GUIDANCE:",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.primary
@@ -621,6 +882,7 @@ fun CameraInspectionScreen(
                 }
             }
         }
+
 
         item {
             Spacer(modifier = Modifier.height(30.dp))
